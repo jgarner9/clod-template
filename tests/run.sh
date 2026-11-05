@@ -9,14 +9,21 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/clod-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 fails=0
+# check NAME COMMAND...: runs the command, and counts a failure if it fails
 check() {
-	if eval "$2"; then
-		printf 'ok   %s\n' "$1"
+	local name=$1
+	shift
+	if "$@"; then
+		printf 'ok   %s\n' "$name"
 	else
-		printf 'FAIL %s\n' "$1"
+		printf 'FAIL %s\n' "$name"
 		fails=$((fails + 1))
 	fi
 }
+same() { [ "$1" = "$2" ]; }
+exists() { [ -e "$1" ] || [ -L "$1" ]; }
+missing() { ! exists "$1"; }
+has() { grep -q "$2" "$1" 2>/dev/null; }
 
 # a copy of the repo with a rule, a skill, a setting and a server to install
 src="$work/clod"
@@ -62,50 +69,54 @@ claude_dir="$HOME/.claude"
 
 # --dry-run changes nothing
 "$src/install.sh" --dry-run >/dev/null
-check "dry run writes no rule" '[ ! -e "$claude_dir/rules/clod/example.md" ]'
-check "dry run adds no server" '[ ! -e "$HOME/claude.log" ]'
+check "dry run writes no rule" missing "$claude_dir/rules/clod/example.md"
+check "dry run adds no server" missing "$HOME/claude.log"
 
 # install
-"$src/install.sh" --yes >"$work/out" 2>&1 || { cat "$work/out"; exit 1; }
-check "rule copied" '[ -f "$claude_dir/rules/clod/example.md" ]'
-check "skill copied" '[ -f "$claude_dir/skills/hello/SKILL.md" ]'
-check "settings keep yours" '[ "$(jq -r .model "$claude_dir/settings.json")" = opus ]'
-check "settings add clod's" '[ "$(jq -r .theme "$claude_dir/settings.json")" = dark ]'
-check "lists are joined" '[ "$(jq -c .permissions.allow "$claude_dir/settings.json")" = "[\"Read(*)\",\"Bash(rg *)\"]" ]'
-check "no \$schema merged" '[ "$(jq -r ".\"\$schema\" // \"none\"" "$claude_dir/settings.json")" = none ]'
-check "server added" 'grep -qx "added docs" "$HOME/claude.log"'
-check "clod linked" '[ -L "$HOME/.local/bin/clod" ]'
-check "your agent kept" '[ "$(cat "$claude_dir/agents/mine.md")" = mine ]'
+"$src/install.sh" --yes >"$work/out" 2>&1 || {
+	cat "$work/out"
+	exit 1
+}
+settings="$claude_dir/settings.json"
+check "rule copied" exists "$claude_dir/rules/clod/example.md"
+check "skill copied" exists "$claude_dir/skills/hello/SKILL.md"
+check "settings keep yours" same "$(jq -r .model "$settings")" opus
+check "settings add clod's" same "$(jq -r .theme "$settings")" dark
+check "lists are joined" same "$(jq -c .permissions.allow "$settings")" '["Read(*)","Bash(rg *)"]'
+check "no \$schema merged" same "$(grep -c schema "$settings")" 0
+check "server added" has "$HOME/claude.log" "^added docs$"
+check "clod linked" exists "$HOME/.local/bin/clod"
+check "your agent kept" same "$(cat "$claude_dir/agents/mine.md")" mine
 
 # again: nothing new, no second add
 "$src/install.sh" --yes >"$work/out2" 2>&1
-check "second run adds the server once" '[ "$(grep -c "added docs" "$HOME/claude.log")" = 1 ]'
+check "second run adds the server once" same "$(grep -c "added docs" "$HOME/claude.log")" 1
 
 # a skill taken out of the repo is taken out of Claude Code
 rm -rf "$src/claude/skills/hello"
 "$src/install.sh" --yes >/dev/null 2>&1
-check "dropped skill removed" '[ ! -e "$claude_dir/skills/hello/SKILL.md" ]'
+check "dropped skill removed" missing "$claude_dir/skills/hello/SKILL.md"
 
 # a file of yours where clod would write is left alone
 mkdir -p "$src/claude/agents"
 printf 'clods\n' >"$src/claude/agents/mine.md"
 "$src/install.sh" --yes >/dev/null 2>"$work/err"
-check "your file not overwritten" '[ "$(cat "$claude_dir/agents/mine.md")" = mine ]'
-check "and it says so" 'grep -q "is yours" "$work/err"'
+check "your file not overwritten" same "$(cat "$claude_dir/agents/mine.md")" mine
+check "and it says so" has "$work/err" "is yours"
 
 # status and uninstall
-status_out=$("$src/install.sh" status)
-check "status lists the rule" 'printf "%s" "$status_out" | grep -q "rules/clod/example.md"'
+"$src/install.sh" status >"$work/status"
+check "status lists the rule" has "$work/status" "rules/clod/example.md"
 "$src/install.sh" uninstall >/dev/null 2>&1
-check "uninstall removes the rule" '[ ! -e "$claude_dir/rules/clod/example.md" ]'
-check "uninstall removes the server" 'grep -qx "removed docs" "$HOME/claude.log"'
-check "uninstall removes the link" '[ ! -e "$HOME/.local/bin/clod" ]'
-check "uninstall keeps your agent" '[ -f "$claude_dir/agents/mine.md" ]'
+check "uninstall removes the rule" missing "$claude_dir/rules/clod/example.md"
+check "uninstall removes the server" has "$HOME/claude.log" "^removed docs$"
+check "uninstall removes the link" missing "$HOME/.local/bin/clod"
+check "uninstall keeps your agent" exists "$claude_dir/agents/mine.md"
 
 # CLAUDE_CONFIG_DIR moves everything
 export CLAUDE_CONFIG_DIR="$work/elsewhere"
 "$src/install.sh" --yes >/dev/null 2>&1
-check "CLAUDE_CONFIG_DIR is used" '[ -f "$CLAUDE_CONFIG_DIR/rules/clod/example.md" ]'
+check "CLAUDE_CONFIG_DIR is used" exists "$CLAUDE_CONFIG_DIR/rules/clod/example.md"
 
 if [ "$fails" -gt 0 ]; then
 	printf '%d failed\n' "$fails"

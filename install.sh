@@ -209,7 +209,9 @@ status() {
 	local kind value
 	while IFS="$(printf '\t')" read -r kind value; do
 		case $kind in
-		file) [ -f "$value" ] && say "  $value" || say "  $value (missing)" ;;
+		file)
+			if [ -f "$value" ]; then say "  $value"; else say "  $value (missing)"; fi
+			;;
 		mcp) say "  MCP server $value" ;;
 		esac
 	done <"$MANIFEST"
