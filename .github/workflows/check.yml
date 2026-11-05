@@ -1,0 +1,22 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      matrix:
+        # macOS for its bash 3.2
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - if: runner.os == 'Linux'
+        run: shellcheck install.sh tests/run.sh
+      - run: tests/run.sh
